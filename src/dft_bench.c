@@ -153,10 +153,7 @@ int64_t bench_dft23(complex float *buf, size_t len) {
     clock_gettime(CLOCK_MONOTONIC, &tp_start);
 
     for (ssize_t i = 0; i < ((ssize_t) (len / DFT_SIZE)); i++) {
-        for (size_t j = 0; j < DFT_SIZE; j++)
-            in[j] = buf[DFT_SIZE*i + j];
-        
-        dft23(in, coeffs, out);
+        dft23(&buf[DFT_SIZE*i], coeffs, out);
 
         for (int j = 0; j < DFT_SIZE; j++)
             sum += out[j];
