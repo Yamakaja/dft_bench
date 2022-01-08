@@ -182,8 +182,14 @@ int main(int argc, char *argv[]) {
     xoroshiro128plus_next(&xoro_state);
 
     size_t len = 1024 * 1024 * 32;
-    if (argc > 1 && sscanf(argv[1], "%lu\n", &len) != 1) {
+    if (argc > 1 && sscanf(argv[1], "%lu", &len) != 1) {
         fprintf(stderr, "%s: Invalid bufer size: %s\n", argv[0], argv[1]);
+        return EXIT_FAILURE;
+    }
+
+    int which = 3;
+    if (argc > 2 && sscanf(argv[2], "%d", &which) != 1) {
+        fprintf(stderr, "%s: Invalid selector id: %s\n", argv[0], argv[2]);
         return EXIT_FAILURE;
     }
 
@@ -212,11 +218,15 @@ int main(int argc, char *argv[]) {
 #endif
 
     int64_t duration;
-    duration = bench_fftw(samples, len);
-    printf("FFTW:   Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+    if (which & 0x1) {
+        duration = bench_fftw(samples, len);
+        printf("FFTW:   Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+    }
 
-    duration = bench_dft23(samples, len);
-    printf("DFT:    Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+    if (which & 0x2) {
+        duration = bench_dft23(samples, len);
+        printf("DFT:    Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+    }
 
     // Teardown
     free(samples);
