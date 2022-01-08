@@ -1,0 +1,6 @@
+# Build
+build/
+
+# Vim
+*~
+*swp
