@@ -4,3 +4,6 @@ build/
 # Vim
 *~
 *swp
+
+# Perf
+perf.data
