@@ -4,13 +4,13 @@ This code was created because i wanted to benchmark FFTW against my own (naive) 
 
 ```
 $ ./dft_bench $((1024 * 1024 * 32))
-1049933.000000 + 1069.911133j
-FFTW:   Duration: 198184545 ns, Throughput: 169.309025 MS/s
-1049933.000000 + 1069.924072j
-DFT:    Duration: 282934895 ns, Throughput: 118.594180 MS/s
-1049933.000000 + 1069.945679j
-DFT:    Duration: 742166532 ns, Throughput: 45.211459 MS/s
-1049932.875000 + 1069.913696j
-DFT:    Duration: 187973120 ns, Throughput: 178.506544 MS/s
+5234866.500000 + 2819.280029j
+FFTW:   Duration: 399798919 ns, Throughput: 167.856542 MS/s
+5234867.500000 + 2819.287842j
+DFT:    Duration: 559902033 ns, Throughput: 119.858225 MS/s
+5234867.000000 + 2819.321777j
+DFT:    Duration: 1509244166 ns, Throughput: 44.465213 MS/s
+5234867.500000 + 2819.275146j
+DFT:    Duration: 279784284 ns, Throughput: 239.859305 MS/s
 ```
 
