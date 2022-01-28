@@ -39,7 +39,7 @@ void prepare_sample_sequence(complex float *buf, size_t len) {
     float t = 0;
 
     for (size_t i = 0; i < len; i++) {
-        buf[i] = sinf(2 * M_PI * SINE_FREQ * t) + NOISE_AMPLITUDE * gaussian(xoroshiro128plus_next(&xoro_state));
+        buf[i] = sinf(2 * M_PI * SINE_FREQ * t); // + NOISE_AMPLITUDE * gaussian(xoroshiro128plus_next(&xoro_state));
         t += 1.0f/SAMPLE_RATE;
     }
 }
@@ -172,31 +172,61 @@ inline __m256 _mm256_neg_ps(__m256 x) {
 }
 
 void dft23_3(complex float *buf, float *coeffs, complex float *out) {
-    __m256 b_0, b_1, b_r, b_i, c_r, c_i, s_r, s_i;
+    __m256 b_0, b_1, b_r, b_i, c_r, c_i, s_r, s_i, o_r, o_i;
+    // b_0, b_1: Input samples, interleaved
+    // b_r, b_i: Input samples, split into real and imaginary vector
+    // c_r, c_i: DFT coefficient, split into complex and imaginary
+    // s_r, s_i: Result of complex multiplication
+    // o_r, o_i: DFT result accumulators, used for deferred processing of result
 
-    for (int k = 0; k < DFT_SIZE; k++) {
-        s_r = _mm256_set1_ps(0);
-        s_i = _mm256_set1_ps(0);
+    s_r = _mm256_setzero_ps();
+    s_i = _mm256_setzero_ps();
 
-        for (int j = 0; j < 3; j++) {
-            b_0 = _mm256_loadu_ps((float *) &buf[8*j]);
-            b_1 = _mm256_loadu_ps((float *) &buf[8*j+4]);
-
-            b_r = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(0, 2, 0, 2));
-            b_i = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(1, 3, 1, 3));
-            c_r = _mm256_loadu_ps(&coeffs[48*k+j*16]);
-            c_i = _mm256_loadu_ps(&coeffs[48*k+j*16+8]);
-
-            s_r = _mm256_add_ps(s_r, _mm256_fmsub_ps(b_r, c_r, _mm256_mul_ps(b_i, c_i)));
-            s_i = _mm256_add_ps(s_i, _mm256_fmadd_ps(b_r, c_i, _mm256_mul_ps(b_i, c_r)));
-        }
-
-        s_r = _mm256_hadd_ps(s_r, _mm256_permute2f128_ps(s_r, s_r, 1));
-        s_i = _mm256_hadd_ps(s_i, _mm256_permute2f128_ps(s_i, s_i, 1));
-        s_r = _mm256_hadd_ps(s_r, s_r);
-        s_i = _mm256_hadd_ps(s_i, s_i);
-        out[k] = _mm256_cvtss_f32(_mm256_hadd_ps(s_r, s_r)) + I * _mm256_cvtss_f32(_mm256_hadd_ps(s_i, s_i));
+#define LOOP_BODY(j)                                                                    \
+    {                                                                                   \
+        b_0 = _mm256_loadu_ps((float *) &buf[8*j]);                                     \
+        b_1 = _mm256_loadu_ps((float *) &buf[8*j+4]);                                   \
+                                                                                        \
+        b_r = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(0, 2, 0, 2));                      \
+        b_i = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(1, 3, 1, 3));                      \
+                                                                                        \
+        c_r = _mm256_loadu_ps(&coeffs[48*k+j*16]);                                      \
+        c_i = _mm256_loadu_ps(&coeffs[48*k+j*16+8]);                                    \
+                                                                                        \
+        s_r = _mm256_add_ps(s_r, _mm256_fmsub_ps(b_r, c_r, _mm256_mul_ps(b_i, c_i)));   \
+        s_i = _mm256_add_ps(s_i, _mm256_fmadd_ps(b_r, c_i, _mm256_mul_ps(b_i, c_r)));   \
     }
+
+    int k = 0;
+    for (int j = 0; j < 3; j++)
+        LOOP_BODY(j);
+
+    o_r = _mm256_hadd_ps(s_r, _mm256_permute2f128_ps(s_r, s_r, 1));
+    o_i = _mm256_hadd_ps(s_i, _mm256_permute2f128_ps(s_i, s_i, 1));
+
+    for (k = 1; k < DFT_SIZE; k++) {
+        s_r = _mm256_setzero_ps();
+        s_i = _mm256_setzero_ps();
+
+        LOOP_BODY(0);
+
+        o_r = _mm256_hadd_ps(o_r, o_r);
+        o_i = _mm256_hadd_ps(o_i, o_i);
+
+        LOOP_BODY(1);
+
+        out[k-1] = _mm256_cvtss_f32(_mm256_hadd_ps(o_r, o_r)) + I * _mm256_cvtss_f32(_mm256_hadd_ps(o_i, o_i));
+
+        LOOP_BODY(2);
+
+        o_r = _mm256_hadd_ps(s_r, _mm256_permute2f128_ps(s_r, s_r, 1));
+        o_i = _mm256_hadd_ps(s_i, _mm256_permute2f128_ps(s_i, s_i, 1));
+    }
+
+    o_r = _mm256_hadd_ps(o_r, o_r);
+    o_i = _mm256_hadd_ps(o_i, o_i);
+
+    out[k-1] = _mm256_cvtss_f32(_mm256_hadd_ps(o_r, o_r)) + I * _mm256_cvtss_f32(_mm256_hadd_ps(o_i, o_i));
 }
 
 void gen_dft23_coeffs(complex float *coeffs) {
