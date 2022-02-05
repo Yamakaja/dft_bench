@@ -13,13 +13,14 @@
 
 #include <fftw3.h>
 
+#include "dft23.h"
 #include "xoroshiro128plus.h"
 
 #define SAMPLE_RATE 1000
 #define SINE_FREQ   240
 #define NOISE_AMPLITUDE 0.05
 
-#define DFT_SIZE 23
+#define DEBUG_VALS false
 
 xoroshiro128plus_t xoro_state;
 
@@ -43,7 +44,6 @@ void prepare_sample_sequence(complex float *buf, size_t len) {
         t += 1.0f/SAMPLE_RATE;
     }
 }
-
 
 void dump_to_file(complex float *buf, size_t len) {
     FILE *dout = fopen("/tmp/samples.dat", "w");
@@ -82,8 +82,15 @@ int64_t bench_fftw(complex float *buf, size_t len) {
 
         fftwf_execute(p);
 
-        for (int j = 0; j < DFT_SIZE; j++)
+        for (int j = 0; j < DFT_SIZE; j++) {
+            if (DEBUG_VALS)
+                printf("%d: %.3f + j%.4f\n", j, crealf(out[j]), cimagf(out[j]));
+
             sum += out[j];
+        }
+
+        if (DEBUG_VALS)
+            break;
     }
     
     clock_gettime(CLOCK_MONOTONIC, &tp_end);
@@ -92,7 +99,7 @@ int64_t bench_fftw(complex float *buf, size_t len) {
     fftwf_free(in);
     fftwf_free(out);
 
-    printf("%f + %fj\n", creal(sum), cimag(sum));
+    printf("FFTW:   SUM(X_k) = %f + %fj\n", creal(sum), cimag(sum));
 
     int64_t s = tp_end.tv_sec - tp_start.tv_sec;
     int64_t ns = (int64_t) tp_end.tv_nsec - (int64_t) tp_start.tv_nsec;
@@ -100,205 +107,63 @@ int64_t bench_fftw(complex float *buf, size_t len) {
     return s * 1000000000L + ns;
 }
 
-inline __m256 dft23_cmult4(__m256 a, __m256 b) {
-    __m256 neg = _mm256_set_ps(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
-
-    __m256 c = _mm256_mul_ps(a, b); // a*c|b*d
-    b = _mm256_permute_ps(b, 0b10110001); // Swapping real/imag; d|c
-    __m256 d = _mm256_mul_ps(a, b); // a*d|b*c
-    c = _mm256_mul_ps(c, neg); // a*c|-b*d
-    return _mm256_permute_ps(_mm256_hadd_ps(c, d), 0b11011000);
-}
-
-inline void dft23_chadd4(__m256 a, float *out) {
-        __m256 sum = _mm256_add_ps(a, _mm256_permute2f128_ps(a, a, 1));
-        sum = _mm256_add_ps(sum, _mm256_permute_ps(sum, 0b00001110));
-        _mm256_maskstore_ps(out, _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1), sum);
-}
-
-void dft23(complex float *buf, complex float *coeffs, complex float *out) {
-    for (int k = 0; k < DFT_SIZE; k++) {
-        __m256 sum = _mm256_set1_ps(0.0f);
-        for (int i = 0; i < 6; i++) {
-            __m256 a = _mm256_loadu_ps((float*) &buf[4*i]);
-            __m256 b = _mm256_load_ps((float*) &coeffs[24*k + 4*i]);
-            __m256 c = dft23_cmult4(a, b);
-            sum = _mm256_add_ps(sum, c);
-        }
-
-        dft23_chadd4(sum, (float *) &out[k]);
-    }
-}
-
-void dft23_2(complex float *buf, complex float *out) {
-    // np.exp(-1j * np.arange(23)/23 * 2*np.pi)
-    const complex float k_rotators[DFT_SIZE+1] =
-      { 1.f       +0.f          * I,  0.96291729f-0.26979677f * I,
-        0.85441940f-0.51958395f * I,  0.68255314f-0.73083596f * I,
-        0.46006504f-0.88788522f * I,  0.20345601f-0.97908409f * I,
-       -0.06824241f-0.99766877f * I, -0.33487961f-0.94226092f * I,
-       -0.57668032f-0.81696989f * I, -0.77571129f-0.63108794f * I,
-       -0.91721130f-0.39840109f * I, -0.99068595f-0.13616665f * I,
-       -0.99068595f+0.13616665f * I, -0.91721130f+0.39840109f * I,
-       -0.77571129f+0.63108794f * I, -0.57668032f+0.81696989f * I,
-       -0.33487961f+0.94226092f * I, -0.06824241f+0.99766877f * I,
-        0.20345601f+0.97908409f * I,  0.46006504f+0.88788522f * I,
-        0.68255314f+0.73083596f * I,  0.85441940f+0.51958395f * I,
-        0.96291729f+0.26979677f * I,  0};
-
-    for (int k = 0; k < DFT_SIZE; k += 4) {
-        __m256 coeff = _mm256_set_ps(0, 1, 0, 1, 0, 1, 0, 1);
-
-        __m256 rotators = _mm256_loadu_ps((float *) &k_rotators[k]);
-
-        __m256 sum = _mm256_set1_ps(0);
-        for (int n = 0; n < DFT_SIZE; n++) {
-            __m256 sample = _mm256_maskload_ps((float *) &buf[n], _mm256_set_epi32(0, 0, 0, 0, 0, 0, -1, -1));
-            sample = _mm256_permutevar8x32_ps(sample, _mm256_set_epi32(1, 0, 1, 0, 1, 0, 1, 0));
-
-            sum = _mm256_add_ps(sum, dft23_cmult4(coeff, sample));
-            coeff = dft23_cmult4(coeff, rotators);
-        }
-
-        _mm256_store_ps((float *) &out[k], sum);
-    }
-}
-
-#define _PERM_MASK(a, b, c, d) ((d << 6) + (c << 4) + (b << 2) + a)
-
 inline __m256 _mm256_neg_ps(__m256 x) {
     return _mm256_castsi256_ps(_mm256_xor_si256(_mm256_castps_si256(x),
                 _mm256_set_epi32(1 << 31, 1 << 31, 1 << 31, 1 << 31, 1 << 31, 1 << 31, 1 << 31, 1 << 31)));
-}
-
-void dft23_3(complex float *buf, float *coeffs, complex float *out) {
-    __m256 b_0, b_1, b_r, b_i, c_r, c_i, s_r, s_i, o_r, o_i, o;
-    // b_0, b_1: Input samples, interleaved
-    // b_r, b_i: Input samples, split into real and imaginary vector
-    // c_r, c_i: DFT coefficient, split into complex and imaginary
-    // s_r, s_i: Result of complex multiplication
-    // o_r, o_i: DFT result accumulators, used for deferred processing of result
-
-    s_r = _mm256_setzero_ps();
-    s_i = _mm256_setzero_ps();
-
-#define LOOP_BODY(j)                                                                    \
-    {                                                                                   \
-        b_0 = _mm256_loadu_ps((float *) &buf[8*j]);                                     \
-        b_1 = _mm256_loadu_ps((float *) &buf[8*j+4]);                                   \
-                                                                                        \
-        b_r = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(0, 2, 0, 2));                      \
-        b_i = _mm256_shuffle_ps(b_0, b_1, _PERM_MASK(1, 3, 1, 3));                      \
-                                                                                        \
-        c_r = _mm256_loadu_ps(&coeffs[48*k+j*16]);                                      \
-        c_i = _mm256_loadu_ps(&coeffs[48*k+j*16+8]);                                    \
-                                                                                        \
-        s_r = _mm256_add_ps(s_r, _mm256_fmsub_ps(b_r, c_r, _mm256_mul_ps(b_i, c_i)));   \
-        s_i = _mm256_add_ps(s_i, _mm256_fmadd_ps(b_r, c_i, _mm256_mul_ps(b_i, c_r)));   \
-    }
-
-    int k = 0;
-    for (int j = 0; j < 3; j++)
-        LOOP_BODY(j);
-
-#define _mm256_flip(x) _mm256_permute2f128_ps(x, x, 1)
-
-    o_r = _mm256_add_ps(s_r, _mm256_flip(s_r));
-    o_i = _mm256_add_ps(s_i, _mm256_flip(s_i));
-    o = _mm256_permute2f128_ps(o_r, o_i, 0x20);
-
-    for (k = 1; k < DFT_SIZE; k++) {
-        s_r = _mm256_setzero_ps();
-        s_i = _mm256_setzero_ps();
-
-        LOOP_BODY(0);
-
-        o = _mm256_hadd_ps(o, o);
-
-        LOOP_BODY(1);
-
-        o = _mm256_hadd_ps(o, o);
-
-        LOOP_BODY(2);
-
-        out[k-1] = _mm256_cvtss_f32(o) + I*_mm256_cvtss_f32(_mm256_flip(o));
-
-        o_r = _mm256_add_ps(s_r, _mm256_flip(s_r));
-        o_i = _mm256_add_ps(s_i, _mm256_flip(s_i));
-        o = _mm256_permute2f128_ps(o_r, o_i, 0x20);
-    }
-
-    o = _mm256_hadd_ps(o, o);
-    o = _mm256_hadd_ps(o, o);
-
-    out[k-1] = _mm256_cvtss_f32(o) + I * _mm256_cvtss_f32(_mm256_flip(o));
-}
-
-void gen_dft23_coeffs(complex float *coeffs) {
-    for (int k = 0; k < DFT_SIZE; k++) {
-        for (int n = 0; n < DFT_SIZE; n++)
-            coeffs[24*k+n] = cos(2 * M_PI / DFT_SIZE * k * n) - I * sin(2 * M_PI / DFT_SIZE * k * n);
-        coeffs[24*k+DFT_SIZE] = 0;
-    }
-}
-
-inline size_t coeff_index_gen(size_t k, size_t n, bool imag) {
-    size_t slot = n & ~0x7UL;
-    size_t i = n & 0x7UL;
-    const size_t IDX_TR[8] = {0, 1, 4, 5, 2, 3, 6, 7};
-    return 2*(24*k + slot) + IDX_TR[i] + imag*8;
-}
-
-void gen_dft23_coeffs_separated(float *coeffs) {
-    for (int k = 0; k < DFT_SIZE; k++) {
-        for (int n = 0; n < DFT_SIZE; n++) {
-            coeffs[coeff_index_gen(k, n, false)] = cos(2 * M_PI / DFT_SIZE * k * n);
-            coeffs[coeff_index_gen(k, n, true)] = -sin(2 * M_PI / DFT_SIZE * k * n);
-        }
-        coeffs[coeff_index_gen(k, DFT_SIZE, false)] = 0;
-        coeffs[coeff_index_gen(k, DFT_SIZE, true)] = 0;
-    }
 }
 
 int64_t bench_dft23(complex float *buf, size_t len, int algorithm) {
     struct timespec tp_start; // tv_sec, tv_nsec
     struct timespec tp_end; // tv_sec, tv_nsec
 
-    complex float *coeffs = fftwf_malloc(sizeof(complex float) * 24 * DFT_SIZE);
-    float *coeffs_separated = fftwf_malloc(sizeof(complex float) * 24 * DFT_SIZE);
+    complex float *coeffs_1 = fftwf_malloc(sizeof(complex float) * 24 * DFT_SIZE);
+    float *coeffs_3 = fftwf_malloc(sizeof(complex float) * 24 * DFT_SIZE);
+    float *coeffs_4 = fftwf_malloc(sizeof(complex float) * 24 * DFT_SIZE);
     complex float sum = 0;
 
     complex float *out = fftwf_malloc(sizeof(complex float) * 24);
 
-    gen_dft23_coeffs(coeffs);
-    gen_dft23_coeffs_separated(coeffs_separated);
+    gen_dft23_coeffs_1(coeffs_1);
+    gen_dft23_coeffs_3(coeffs_3);
+    gen_dft23_coeffs_4(coeffs_4);
 
     clock_gettime(CLOCK_MONOTONIC, &tp_start);
 
     for (ssize_t i = 0; i < ((ssize_t) (len / DFT_SIZE)); i++) {
         switch (algorithm) {
             case 0:
-                dft23(&buf[DFT_SIZE*i], coeffs, out);
+                dft23_1(&buf[DFT_SIZE*i], coeffs_1, out);
                 break;
             case 1:
                 dft23_2(&buf[DFT_SIZE*i], out);
                 break;
             case 2:
-                dft23_3(&buf[DFT_SIZE*i], coeffs_separated, out);
+                dft23_3(&buf[DFT_SIZE*i], coeffs_3, out);
+                break;
+            case 3:
+                dft23_4(&buf[DFT_SIZE*i], coeffs_4, out);
                 break;
         }
 
-        for (int j = 0; j < DFT_SIZE; j++)
+        for (int j = 0; j < DFT_SIZE; j++) {
+            if (DEBUG_VALS)
+                printf("%d: %.3f + j%.4f\n", j, crealf(out[j]), cimagf(out[j]));
+
             sum += out[j];
+        }
+
+        if (DEBUG_VALS)
+            break;
     }
 
     clock_gettime(CLOCK_MONOTONIC, &tp_end);
 
     fftwf_free(out);
-    fftwf_free(coeffs);
-    fftwf_free(coeffs_separated);
+    fftwf_free(coeffs_1);
+    fftwf_free(coeffs_3);
+    fftwf_free(coeffs_4);
 
-    printf("%f + %fj\n", creal(sum), cimag(sum));
+    printf("DFTv%d:  SUM(X_k) = %f + %fj\n", algorithm+1, creal(sum), cimag(sum));
 
     int64_t s = tp_end.tv_sec - tp_start.tv_sec;
     int64_t ns = (int64_t) tp_end.tv_nsec - (int64_t) tp_start.tv_nsec;
@@ -332,21 +197,15 @@ int main(int argc, char *argv[]) {
     if (which & 0x1) {
         duration = bench_fftw(samples, len);
         printf("FFTW:   Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+        puts("");
     }
 
-    if (which & 0x2) {
-        duration = bench_dft23(samples, len, 0);
-        printf("DFT:    Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
-    }
-
-    if (which & 0x4) {
-        duration = bench_dft23(samples, len, 1);
-        printf("DFT:    Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
-    }
-
-    if (which & 0x8) {
-        duration = bench_dft23(samples, len, 2);
-        printf("DFT:    Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
+    for (int i = 1; i < 5; i++) {
+        if (!((1 << i) & which))
+            continue;
+        duration = bench_dft23(samples, len, i-1);
+        printf("DFTv%d:  Duration: %ld ns, Throughput: %f MS/s\n", i, duration, len / ((double)duration) * 1e3);
+        puts("");
     }
 
     // Teardown
