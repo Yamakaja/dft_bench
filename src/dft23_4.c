@@ -24,7 +24,6 @@ void dft23_4(complex float *buf, float *coeffs, complex float *out) {
         k0_r = _mm256_add_ps(k0_r, _mm256_fmsub_ps(x_r, c0_r, _mm256_mul_ps(x_i, c0_i)));
         k0_i = _mm256_add_ps(k0_i, _mm256_fmadd_ps(x_r, c0_i, _mm256_mul_ps(x_i, c0_r)));
 
-
         // 8-15
         __m256 c1_r = _mm256_loadu_ps(&coeffs[coeff_offset]);
         __m256 c1_i = _mm256_loadu_ps(&coeffs[coeff_offset+8]);
