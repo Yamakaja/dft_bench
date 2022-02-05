@@ -24,6 +24,10 @@
 
 xoroshiro128plus_t xoro_state;
 
+void __attribute__((noinline)) use_result(complex float* buf) {
+    asm volatile ("" : : "r" (buf));
+}
+
 complex double gaussian(uint64_t u) {
     uint64_t u_0 = (u >> 16) & 0xFFFFFFFFFFFFUL;
     uint64_t u_1 = u & 0xFFFF;
@@ -82,15 +86,15 @@ int64_t bench_fftw(complex float *buf, size_t len) {
 
         fftwf_execute(p);
 
-        for (int j = 0; j < DFT_SIZE; j++) {
-            if (DEBUG_VALS)
+        use_result(out);
+        if (DEBUG_VALS) {
+            for (int j = 0; j < DFT_SIZE; j++) {
                 printf("%d: %.3f + j%.4f\n", j, crealf(out[j]), cimagf(out[j]));
+                sum += out[j];
+            }
 
-            sum += out[j];
-        }
-
-        if (DEBUG_VALS)
             break;
+        }
     }
     
     clock_gettime(CLOCK_MONOTONIC, &tp_end);
@@ -99,7 +103,8 @@ int64_t bench_fftw(complex float *buf, size_t len) {
     fftwf_free(in);
     fftwf_free(out);
 
-    printf("FFTW:   SUM(X_k) = %f + %fj\n", creal(sum), cimag(sum));
+    if (DEBUG_VALS)
+        printf("FFTW:   SUM(X_k) = %f + %fj\n", creal(sum), cimag(sum));
 
     int64_t s = tp_end.tv_sec - tp_start.tv_sec;
     int64_t ns = (int64_t) tp_end.tv_nsec - (int64_t) tp_start.tv_nsec;
@@ -145,15 +150,16 @@ int64_t bench_dft23(complex float *buf, size_t len, int algorithm) {
                 break;
         }
 
-        for (int j = 0; j < DFT_SIZE; j++) {
-            if (DEBUG_VALS)
+        use_result(out);
+
+        if (DEBUG_VALS) {
+            for (int j = 0; j < DFT_SIZE; j++) {
                 printf("%d: %.3f + j%.4f\n", j, crealf(out[j]), cimagf(out[j]));
+                sum += out[j];
+            }
 
-            sum += out[j];
-        }
-
-        if (DEBUG_VALS)
             break;
+        }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &tp_end);
@@ -163,7 +169,8 @@ int64_t bench_dft23(complex float *buf, size_t len, int algorithm) {
     fftwf_free(coeffs_3);
     fftwf_free(coeffs_4);
 
-    printf("DFTv%d:  SUM(X_k) = %f + %fj\n", algorithm+1, creal(sum), cimag(sum));
+    if (DEBUG_VALS)
+        printf("DFTv%d:  SUM(X_k) = %f + %fj\n", algorithm+1, creal(sum), cimag(sum));
 
     int64_t s = tp_end.tv_sec - tp_start.tv_sec;
     int64_t ns = (int64_t) tp_end.tv_nsec - (int64_t) tp_start.tv_nsec;
@@ -197,7 +204,8 @@ int main(int argc, char *argv[]) {
     if (which & 0x1) {
         duration = bench_fftw(samples, len);
         printf("FFTW:   Duration: %ld ns, Throughput: %f MS/s\n", duration, len / ((double)duration) * 1e3);
-        puts("");
+        if (DEBUG_VALS)
+            puts("");
     }
 
     for (int i = 1; i < 5; i++) {
@@ -205,7 +213,8 @@ int main(int argc, char *argv[]) {
             continue;
         duration = bench_dft23(samples, len, i-1);
         printf("DFTv%d:  Duration: %ld ns, Throughput: %f MS/s\n", i, duration, len / ((double)duration) * 1e3);
-        puts("");
+        if (DEBUG_VALS)
+            puts("");
     }
 
     // Teardown
