@@ -68,25 +68,22 @@ int64_t bench_fftw(complex float *buf, size_t len) {
     struct timespec tp_end; // tv_sec, tv_nsec
 
     // Setup fftw
-    fftwf_complex *in, *out;
+    fftwf_complex *out;
     fftwf_plan p;
 
-    in = (fftwf_complex *) fftwf_malloc(sizeof(fftwf_complex) * DFT_SIZE);
     out = (fftwf_complex *) fftwf_malloc(sizeof(fftwf_complex) * DFT_SIZE);
 
-    p = fftwf_plan_dft_1d(DFT_SIZE, in, out, FFTW_FORWARD, FFTW_MEASURE);
+    p = fftwf_plan_dft_1d(DFT_SIZE, &buf[0], out, FFTW_FORWARD, FFTW_MEASURE | FFTW_UNALIGNED);
 
     complex float sum = 0;
 
     clock_gettime(CLOCK_MONOTONIC, &tp_start);
 
     for (ssize_t i = 0; i < ((ssize_t) (len / DFT_SIZE)); i++) {
-        for (size_t j = 0; j < DFT_SIZE; j++)
-            in[j] = buf[DFT_SIZE*i + j];
-
-        fftwf_execute(p);
+        fftwf_execute_dft(p, &buf[DFT_SIZE*i], out);
 
         use_result(out);
+
         if (DEBUG_VALS) {
             for (int j = 0; j < DFT_SIZE; j++) {
                 printf("%d: %.3f + j%.4f\n", j, crealf(out[j]), cimagf(out[j]));
@@ -100,7 +97,6 @@ int64_t bench_fftw(complex float *buf, size_t len) {
     clock_gettime(CLOCK_MONOTONIC, &tp_end);
 
     fftwf_destroy_plan(p);
-    fftwf_free(in);
     fftwf_free(out);
 
     if (DEBUG_VALS)
@@ -211,8 +207,10 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < 5; i++) {
         if (!((1 << i) & which))
             continue;
+
         duration = bench_dft23(samples, len, i-1);
         printf("DFTv%d:  Duration: %ld ns, Throughput: %f MS/s\n", i, duration, len / ((double)duration) * 1e3);
+
         if (DEBUG_VALS)
             puts("");
     }
